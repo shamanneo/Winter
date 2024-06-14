@@ -323,8 +323,6 @@ class MultiScaleMaskedTransformerDecoder(nn.Module):
         self.mask_embed = MLP(hidden_dim, hidden_dim, mask_dim, 3)
 
         self.query_module = QueryModule(num_queries, hidden_dim)
-        self.attention_module_1 = AttentionModule(num_queries, hidden_dim)
-        self.attention_module_2 = AttentionModule(num_queries, hidden_dim)
 
     @classmethod
     def from_config(cls, cfg, in_channels, mask_classification):
@@ -381,9 +379,7 @@ class MultiScaleMaskedTransformerDecoder(nn.Module):
         predictions_class = []
         predictions_mask = []
 
-        object_prior = self.query_module(x[1])
-        attn_out = self.attention_module_1(object_prior, query_feat)
-        object_query = self.attention_module_2(object_prior, attn_out + query_embed)
+        object_query = self.query_module(x, mask_features, query_feat, query_embed)
 
         # prediction heads on learnable query features
         outputs_class, outputs_mask, attn_mask = self.forward_prediction_heads(object_query, mask_features, attn_mask_target_size=size_list[0])
@@ -394,7 +390,7 @@ class MultiScaleMaskedTransformerDecoder(nn.Module):
             level_index = i % self.num_feature_levels
             attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False
 
-            object_query = self._forward_one_block(src, pos, object_query, query_embed, attn_mask, level_index, i)
+            object_query = self._forward_one_block(src[i], pos[i], object_query, query_embed, attn_mask, level_index, i)
 
             outputs_class, outputs_mask, attn_mask = self.forward_prediction_heads(object_query, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
             predictions_class.append(outputs_class)
@@ -411,14 +407,14 @@ class MultiScaleMaskedTransformerDecoder(nn.Module):
         }
         return out
 
-    def _forward_one_block(self, src, pos, object_query, query_embed, attn_mask, level_index, i) :
+    def _forward_one_block(self, pixel_feature, pos, object_query, query_embed, attn_mask, level_index, i) :
         # pixel transformer
-        pixel_out = self.pixel_transformer_self_attention_layers[i](src[level_index])
-        pixel_out = self.pixel_transformer_cross_attention_layers[i](pixel_out, object_query)
-        pixel_out = self.pixel_transformer_ffn_layers[i](pixel_out)
+        pixel_feature = self.pixel_transformer_self_attention_layers[i](pixel_feature)
+        pixel_feature = self.pixel_transformer_cross_attention_layers[i](pixel_feature, object_query)
+        pixel_feature = self.pixel_transformer_ffn_layers[i](pixel_feature)
 
         # query transformer
-        query_out = self.query_transformer_cross_attention_layers[i](object_query, pixel_out, memory_mask = attn_mask, memory_key_padding_mask = None,  pos = pos[level_index], query_pos = query_embed)
+        query_out = self.query_transformer_cross_attention_layers[i](object_query, pixel_feature, memory_mask = attn_mask, memory_key_padding_mask = None,  pos = pos[level_index], query_pos = query_embed)
         query_out = self.query_transformer_self_attention_layers[i](query_out, tgt_mask = None, tgt_key_padding_mask = None, query_pos = query_embed)
         query_out = self.query_transformer_ffn_layers[i](query_out)
 
